@@ -109,11 +109,18 @@ The merged stream is served by `overpass`'s own nginx, so it is public at `https
 
 ### supercronic
 
-supercronic runs `bootstrap.sh` and `catch-up.sh` at every tick. It doesn't start a job while the previous run of that job is still going, waits for running jobs on SIGTERM, and logs each job's output and exit status. It keeps no state, since all state is in files. It is one static binary, downloaded once, checked against a pinned SHA1 at every start, and cached on `sidecar-work`, so restarts and redeploys don't depend on GitHub. A plain `while sleep` loop would work, but it would lack overlap protection, wall-clock alignment, per-job exit logging and graceful shutdown.
+supercronic runs `bootstrap.sh` and `catch-up.sh` at every tick. It doesn't start a job while the previous run of that job is still going, waits for running jobs on SIGTERM, and logs each job's output and exit status. It keeps no state, since all state is in files. It is one static binary, downloaded when the image is built and checked against a pinned SHA1, so container starts don't depend on GitHub. A plain `while sleep` loop would work, but it would lack overlap protection, wall-clock alignment, per-job exit logging and graceful shutdown.
 
-### Scripts in `configs:`, built by `build.sh`
+### Scripts baked into a thin image
 
-The scripts are mounted through top-level `configs:` with inline `content`, which Coolify's paste-a-compose deploy supports. This keeps the deployment to one pasted file and one shared image, with no build step on the host. Compose interpolates `$` everywhere in the file, `configs` content included, so the scripts are kept as plain files in `sidecar/`, and `build.sh` inlines them with every `$` doubled.
+Coolify deploys the stack from the public Git repo with the Docker Compose build pack, which builds `build:` services from the checkout. `Dockerfile` starts `FROM` the upstream image (`OVERPASS_IMAGE`, passed as a build arg) and adds supercronic and `sidecar/` at `/scripts`. `sidecar` and `overpass-init` both build it, and the second build is a cache hit. `overpass` runs the upstream image unchanged. So all three services still share one Overpass build, and one variable picks it.
+
+Both services pin `platform: linux/amd64`, because the upstream image and the supercronic binary are amd64-only. Without it, a build on an arm64 host looks for an arm64 base and fails.
+
+This replaced two earlier approaches:
+
+- **Scripts inlined under `configs:`.** For Coolify's paste-a-compose deploy, a generator inlined each script as `configs` `content` with every `$` doubled, since Compose interpolates `$` everywhere in the file. It worked, but the deployed file was 950 generated lines, and each change needed a regeneration step.
+- **Bind-mounting the scripts from the checkout.** Coolify supports this only with "Preserve repository during deployment" turned on, and a missing file source turns into a directory. A built image has neither problem, and the scripts in a running container can't drift from the image.
 
 ### Service wiring
 
@@ -174,7 +181,7 @@ When sizing the host, add the sidecar's limit to the Overpass dispatcher's `DISP
 
 ## How Coolify behaves
 
-Found with probe deployments on Coolify's paste-a-compose flow:
+Found with probe deployments on Coolify's paste-a-compose flow, before the move to Git deploys (the findings about containers and health don't depend on how the file reaches Coolify):
 
 - `mem_limit`/`memswap_limit`, `depends_on: restart: true` and top-level `configs:` with inline `content` are kept as written. `build:` with `dockerfile_inline` also works, but isn't used.
 - Coolify shows a container in Docker's `starting` health state as healthy, so a long first bootstrap doesn't fail the deployment. Once Docker reports `unhealthy`, Coolify shows the container as "Running (unhealthy)" and the stack as degraded, and it turns healthy again as soon as the check passes.
@@ -219,7 +226,7 @@ Failure cases, each run on the local stack:
 | Stream wiped while the database was behind the new seed | "database can't catch up" at the first tick |
 | Database wiped, snapshot kept | no bootstrap, re-import, `overpass` followed the stream |
 | Snapshot expired, database wiped, sidecar limited to 200 MiB | bootstrap OOM-killed 3 times, "bootstrap has failed 3 times in a row", rebuilt once the limit was raised |
-| `sidecar-work` wiped | supercronic downloaded again, nothing else triggered |
+| `sidecar-work` wiped | supercronic downloaded again, nothing else triggered (since then, supercronic is part of the image) |
 | Region-list change, and back | stream, snapshot and database rebuilt each time, with the right objects present and absent |
 
 These tests found and fixed: init exiting before the stream was seeded, stale cached diffs applied after a re-import, init wiping the database under a running `overpass` (fixed with `restart: true`), and `status.txt` not being rewritten during a long catch-up.
@@ -234,4 +241,4 @@ Deployed on Coolify with `golden_horseshoe` + `eastern_ontario`, alongside a sin
 - **Cutting the planet diffs instead of merging regional ones.** Fetch the planet minute diffs and cut them with `osmium extract` using the union of the regions' polygons. This avoids the barrier and the per-region requests, but downloads the full planet diff every minute and makes the deployment responsible for the clipping rules. It remains a fallback if regional timing proves troublesome.
 - **A plain `while sleep 300` loop** instead of supercronic. It needs no extra binary, but lacks overlap protection, wall-clock alignment, per-job exit logging and graceful shutdown.
 - **Serving the stream from the sidecar**, to keep it internal, or **over `file://`**. Not needed, since the public stream is fine, and `fetch_osc.sh` rejects `file://`.
-- **A custom sidecar image** (`dockerfile_inline` or a registry image). It would give up the single shared image, and a cached supercronic binary covers the only addition the sidecar needs.
+- **A sidecar image published to a registry.** It would need a publishing pipeline and a second version to keep in step with the upstream image. A thin image built on deploy (see *Scripts baked into a thin image*) gives the same result without one.

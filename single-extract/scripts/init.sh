@@ -1,17 +1,12 @@
 #!/usr/bin/env bash
-# Plain shell version of the overpass-init service in b1tw153.yml.
-# Run it inside the b1tw153/overpass-api image (or any environment with curl,
-# osmium and the Overpass binaries), with the database volume mounted at
-# $OVERPASS_DB_DIR, e.g.:
+# Builds the initial Overpass database. The Dockerfile copies it into the
+# image at /scripts/init.sh, and the overpass-init service in b1tw153.yml runs
+# it on every deploy; it exits at once if the database is already initialized.
+# To run it by hand (see README.md, "Running init.sh by hand"):
 #
-#   docker compose -f b1tw153.yml run --rm --no-deps \
-#     -v "$PWD/init.sh:/init.sh:ro" --entrypoint /bin/bash \
-#     overpass-init /init.sh
+#   docker compose -f b1tw153.yml run --rm --no-deps --build overpass-init
 #
-# Compose supplies the image, environment and the project-prefixed database
-# volume; see README.md ("Running init.sh by hand").
-#
-# We inline import_osm_data.sh's steps (osmium | update_database, then
+# We run import_osm_data.sh's steps ourselves (osmium | update_database, then
 # bisect_timestamp.sh) instead of calling it so we can pass --flush-size, skip
 # an already-initialized database, clear files left by a failed import, delete
 # the downloaded PBF afterwards, and only warn (not fail) on an MD5 mismatch,

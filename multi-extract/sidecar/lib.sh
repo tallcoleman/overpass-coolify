@@ -3,7 +3,7 @@
 # sourced, since overpass-init mounts /work read-only.
 #
 # Volumes (see DESIGN.md):
-#   /work                sidecar-work: extracts, raw diffs, snapshot, status fragments, supercronic
+#   /work                sidecar-work: extracts, raw diffs, snapshot, status fragments
 #   /replication         merged-replication: the merged minute stream, regions.txt, status.txt
 #   /opt/overpass/db     overpass-db (read-only in the sidecar)
 # shellcheck shell=bash disable=SC2034  # vars are used by the sourcing scripts

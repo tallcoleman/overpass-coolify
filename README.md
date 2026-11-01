@@ -1,6 +1,6 @@
 # overpass-coolify
 
-Docker Compose deployments of an [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API) server for [Coolify](https://coolify.io), built on the [`b1tw153/overpass-api`](https://github.com/b1tw153/Overpass-API) image. They serve regional extracts from [OpenStreetMap France](https://download.openstreetmap.fr/) and keep them current with minutely updates. Each one is a single Compose file that you paste into Coolify, and each also runs with plain `docker compose`.
+Docker Compose deployments of an [Overpass API](https://wiki.openstreetmap.org/wiki/Overpass_API) server for [Coolify](https://coolify.io), built on the [`b1tw153/overpass-api`](https://github.com/b1tw153/Overpass-API) image. They serve regional extracts from [OpenStreetMap France](https://download.openstreetmap.fr/) and keep them current with minutely updates. Coolify deploys each one from this public repo, as a Docker Compose resource that builds a thin image adding the deployment's scripts to the upstream one. Each also runs with plain `docker compose`.
 
 | Deployment | Use it when | Docs |
 | -- | -- | -- |

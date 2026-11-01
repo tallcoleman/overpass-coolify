@@ -21,21 +21,6 @@ if ! [[ $POLL =~ ^[0-9]+$ ]] || ((POLL < 1 || POLL > 59)); then die "POLL_INTERV
 ((POLL >= 5)) || warn "POLL_INTERVAL_MINUTES=$POLL is below 5; OSM France asks clients to poll state.txt at most every 5 minutes"
 log "sidecar starting: $NREG regions ($(for ((i = 0; i < NREG; i++)); do printf '%s ' "$(region_name "$i")"; done)), tick every $POLL minutes"
 
-# supercronic, cached on sidecar-work and checked on every start.
-SC_VERSION=v0.2.51
-SC_SHA1=1692066e350a88ff4d7d6474fe3c7a6c41ec5e89
-SC=$WORK/bin/supercronic-$SC_VERSION
-mkdir -p "$WORK/bin"
-if ! echo "$SC_SHA1  $SC" | sha1sum -c --status - 2>/dev/null; then
-  log "downloading supercronic $SC_VERSION"
-  fetch "https://github.com/aptible/supercronic/releases/download/$SC_VERSION/supercronic-linux-amd64" "$SC.tmp.dl" \
-    || die "cannot download supercronic"
-  echo "$SC_SHA1  $SC.tmp.dl" | sha1sum -c --status - || { rm -f "$SC.tmp.dl"; die "supercronic SHA1 mismatch"; }
-  chmod +x "$SC.tmp.dl"
-  mv "$SC.tmp.dl" "$SC"
-fi
-find "$WORK/bin" -mindepth 1 -maxdepth 1 ! -name "supercronic-$SC_VERSION" -exec rm -rf {} +
-
 # Region-list check: a stream built for other regions is discarded with the
 # snapshot and raw diffs (overpass-init then wipes and re-imports the database).
 if [ -n "$(ls -A "$REPL")" ] && [ "$(cat "$REPL/regions.txt" 2>/dev/null)" != "$(stamp)" ]; then
@@ -55,4 +40,5 @@ cat >/tmp/crontab <<EOF
 2-59/$POLL * * * * bash $HERE/bootstrap.sh
 EOF
 log "starting supercronic with: $(tr '\n' ';' </tmp/crontab)"
-exec "$SC" /tmp/crontab
+# supercronic is installed in the image by the Dockerfile.
+exec supercronic /tmp/crontab

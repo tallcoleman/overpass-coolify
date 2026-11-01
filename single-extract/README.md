@@ -8,12 +8,23 @@ This setup replaced one based on the `wiktorn/overpass-api` image. The b1tw153 i
 
 ## Files
 
-- `b1tw153.yml` is the Compose file. It defines two services that share the `overpass-db` volume: `overpass-init` (one-shot database import) and `overpass` (the API server and update loop). The `overpass` service also mounts an `overpass-diff` volume, so downloaded minutely diffs and `fetch_osc.log` survive redeploys. Both services use one image, set once at the top of the file (`x-overpass-image`). It defaults to a pinned tag and can be overridden with the `OVERPASS_IMAGE` environment variable, for example in Coolify, without editing the file.
-- `init.sh` is a plain shell version of the `overpass-init` command from the Compose file. It does the same thing, but can be read, run and tested outside Compose.
+- `b1tw153.yml` is the Compose file. It defines two services that share the `overpass-db` volume: `overpass-init` (one-shot database import) and `overpass` (the API server and update loop). The `overpass` service also mounts an `overpass-diff` volume, so downloaded minutely diffs and `fetch_osc.log` survive redeploys. Both services use one upstream image, set once at the top of the file (`x-overpass-image`). It defaults to a pinned tag and can be overridden with the `OVERPASS_IMAGE` environment variable, for example in Coolify, without editing the file. The region is set the same way, with `IMPORT_OSM_DATA_SOURCE` and `OVERPASS_DIFF_URL`, and defaults to Golden Horseshoe.
+- `Dockerfile` builds the `overpass-init` image: the upstream image (`OVERPASS_IMAGE`, passed as a build arg) with `scripts/` copied to `/scripts`.
+- `scripts/init.sh` is the import script that `overpass-init` runs.
 
 ## Deploying on Coolify
 
-Create a Docker Compose resource from the pasted contents of `b1tw153.yml`, and give the `overpass` service its domain with 8080 as the container port. Clients use the bare domain, without a port. Coolify names the volumes `<resource-uuid>_<volume>`, so the database volume is `<resource-uuid>_overpass-db`.
+Create a new resource from a **Public Repository**, with these settings:
+
+| Setting | Value |
+| -- | -- |
+| Repository URL | `https://github.com/tallcoleman/overpass-coolify` |
+| Branch | `main` |
+| Build Pack | Docker Compose |
+| Base Directory | `/single-extract` |
+| Docker Compose Location | `/b1tw153.yml` |
+
+Coolify clones the repo and builds the `overpass-init` image from `Dockerfile` on each deploy. Give the `overpass` service its domain with 8080 as the container port. Clients use the bare domain, without a port. To serve another extract, set `IMPORT_OSM_DATA_SOURCE` and `OVERPASS_DIFF_URL` as environment variables. A public repository has no webhook, so after pushing a change, redeploy in Coolify. Coolify names the volumes `<resource-uuid>_<volume>`, so the database volume is `<resource-uuid>_overpass-db`.
 
 ## Compose settings
 
@@ -46,9 +57,9 @@ The `overpass` healthcheck probes `http://localhost:8080/api/status`, the same e
 
 `replicate_id` is written last, and only on success, so it doubles as the "import completed" marker. If the script dies at any earlier step, the next run starts again from a clean directory.
 
-## Why it is a custom command in the Compose setup
+## Why a custom init script
 
-The upstream image can import this source with its own `import_osm_data.sh`, but that script gives no control over import memory and isn't safe to rerun on every deploy. An inline command in a separate init service solves several problems:
+The upstream image can import this source with its own `import_osm_data.sh`, but that script gives no control over import memory and isn't safe to rerun on every deploy. A custom script in a separate init service solves several problems:
 
 - **Memory control.** The upstream script runs `update_database` without `--flush-size`, so it uses the default of 16, which exhausts memory on a small host. Running `update_database` directly lets us pass `--flush-size`.
 - **Checksums that can't block the import.** The upstream script fetches `<source>.md5`. It skips verification on a 404, but exits on a mismatch. openstreetmap.fr publishes no `.md5` for `<region>-latest.osm.pbf` (the URL this deployment uses), only for `<region>.osm.pbf`, which is the same file. That `.md5` can be stale: on 30 Oct 2026 the Golden Horseshoe `.md5` was dated 29 Oct 01:01, the PBF 30 Oct 15:01, and the hashes didn't match. A strict check against the plain URL would therefore fail the import. `init.sh` checks the hash when a `.md5` exists, but only warns on a mismatch.
@@ -57,21 +68,14 @@ The upstream image can import this source with its own `import_osm_data.sh`, but
 - **Disk.** The upstream script leaves the downloaded PBF in the database directory. `init.sh` deletes it after the import.
 - **A correct starting point for updates.** The server is configured with `OVERPASS_REPLICATE_ID: auto`, which relies on the `replicate_id` file. Computing it from the extract's timestamp avoids a gap or overlap between the imported snapshot and the minutely diffs.
 
-### A note on `$$` in the Compose file
-
-Inside `b1tw153.yml` the same script is inlined as the `command`, with every shell `$` written as `$$`. Compose interpolates a single `$` when it parses the file, using variables from the host or `.env` rather than the service's own environment, so an unescaped `$DB` would arrive in the container empty. `init.sh` has no such escaping because the shell reads it directly.
-
 ## Running init.sh by hand
 
 Run it through Compose as a one-off `overpass-init` container, from this folder:
 
 ```sh
-docker compose -f b1tw153.yml run --rm --no-deps \
-  -v "$PWD/init.sh:/init.sh:ro" \
-  --entrypoint /bin/bash \
-  overpass-init /init.sh
+docker compose -f b1tw153.yml run --rm --no-deps --build overpass-init
 ```
 
-This uses the service's image (including any `OVERPASS_IMAGE` override), environment and database volume, so nothing is repeated here. A plain `docker run -v overpass-db:...` would not work: Compose prefixes volume names with the project name (`single-extract_overpass-db` when run from this folder), so it would import into a new, empty volume. To target a stack deployed under another project name, such as Coolify's (the resource UUID), add `-p <project>`. `docker volume ls` shows the prefix in front of `_overpass-db`.
+`--build` rebuilds the image first, so it picks up local edits to `scripts/init.sh`. This uses the service's image (built on any `OVERPASS_IMAGE` override), environment and database volume, so nothing is repeated here. A plain `docker run -v overpass-db:...` would not work: Compose prefixes volume names with the project name (`single-extract_overpass-db` when run from this folder), so it would import into a new, empty volume. To target a stack deployed under another project name, such as Coolify's (the resource UUID), add `-p <project>`. `docker volume ls` shows the prefix in front of `_overpass-db`.
 
-All settings (`OVERPASS_DB_DIR`, `OVERPASS_DIFF_DIR`, `OVERPASS_META_MODE`, `IMPORT_OSM_DATA_SOURCE`, `OVERPASS_DIFF_URL`, `IMPORT_OSM_COMPRESSION_METHOD`, `IMPORT_FLUSH_SIZE`, `OVERPASS_BIN_DIR`) have defaults matching the Compose file and can be overridden with `-e`.
+All settings (`OVERPASS_DB_DIR`, `OVERPASS_DIFF_DIR`, `OVERPASS_META_MODE`, `IMPORT_OSM_DATA_SOURCE`, `OVERPASS_DIFF_URL`, `IMPORT_OSM_COMPRESSION_METHOD`, `IMPORT_FLUSH_SIZE`, `OVERPASS_BIN_DIR`) have defaults matching the Compose file and can be overridden with `-e`. The script skips a database that is already initialized, so to force a re-import, remove the `overpass-db` volume first.

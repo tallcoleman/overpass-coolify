@@ -1,15 +1,15 @@
 # Multi-extract Overpass deployment
 
-This folder holds a Docker Compose deployment of the [`b1tw153/overpass-api`](https://hub.docker.com/r/b1tw153/overpass-api) image that serves several adjacent OpenStreetMap France extracts as one database, kept current with minutely updates. A sidecar merges the regions' minute diffs into one replication stream, and Overpass follows that stream as if it came from a single extract. It is written for Coolify's paste-a-compose deploy, and runs with plain `docker compose` too. The design, the reasons behind it and the test results are in [`DESIGN.md`](DESIGN.md).
+This folder holds a Docker Compose deployment of the [`b1tw153/overpass-api`](https://hub.docker.com/r/b1tw153/overpass-api) image that serves several adjacent OpenStreetMap France extracts as one database, kept current with minutely updates. A sidecar merges the regions' minute diffs into one replication stream, and Overpass follows that stream as if it came from a single extract. Coolify deploys it from this public Git repo, and it runs with plain `docker compose` too. The design, the reasons behind it and the test results are in [`DESIGN.md`](DESIGN.md).
 
 ## Files
 
-- `b1tw153-multiregion.yml` is the Compose file to paste into Coolify. It is generated, so don't edit it by hand.
-- `compose.template.yml` and `sidecar/` are the sources it is built from. `sidecar/` holds the scripts: `entrypoint.sh`, `bootstrap.sh`, `catch-up.sh` and `health.sh` (the sidecar), `init.sh` (the `overpass-init` command), `lib.sh` (shared helpers) and `tiebreak.pl` (the delete tie-break).
-- `build.sh` writes `b1tw153-multiregion.yml` by inlining each script under `configs:` with every `$` doubled, then checks the result with `docker compose config`. `./build.sh --check` fails if the generated file is out of date.
+- `b1tw153-multiregion.yml` is the Compose file.
+- `Dockerfile` builds the image that `sidecar` and `overpass-init` run: the upstream image (`OVERPASS_IMAGE`, passed as a build arg), plus [supercronic](https://github.com/aptible/supercronic) (pinned, SHA1-checked) and `sidecar/` copied to `/scripts`. `overpass` runs the upstream image unchanged.
+- `sidecar/` holds the scripts: `entrypoint.sh`, `bootstrap.sh`, `catch-up.sh` and `health.sh` (the sidecar), `init.sh` (the `overpass-init` command), `lib.sh` (shared helpers) and `tiebreak.pl` (the delete tie-break).
 - `tools/compare.sh A B` runs the same count queries against two Overpass endpoints (for example a single-extract and a multi-extract deployment) and marks the rows that differ.
 
-To change a script: edit `sidecar/` or `compose.template.yml`, run `shellcheck -x -P SCRIPTDIR sidecar/*.sh`, then `./build.sh`, and commit both the sources and the generated file.
+To change a script: edit it in `sidecar/`, run `shellcheck -x -P SCRIPTDIR sidecar/*.sh`, commit and push, then redeploy in Coolify, which rebuilds the image. Locally, `docker compose up --build` does the same.
 
 ## Services and volumes
 
@@ -21,12 +21,22 @@ To change a script: edit `sidecar/` or `compose.template.yml`, run `shellcheck -
 | -- | -- | -- |
 | `overpass-db` | The Overpass database, with `replicate_id` and the region list it was built for | Re-import (about 16 minutes for three Ontario/Quebec regions) |
 | `overpass-diff` | Diffs fetched by `overpass` | None; init clears it with the database |
-| `sidecar-work` | Downloads, the snapshot (kept `SNAPSHOT_KEEP_HOURS`), cached supercronic | The kept snapshot, so a later re-import has to build a new one |
+| `sidecar-work` | Downloads, the snapshot (kept `SNAPSHOT_KEEP_HOURS`) | The kept snapshot, so a later re-import has to build a new one |
 | `merged-replication` | The merged stream, `regions.txt`, `status.txt` | A new stream, which the database usually can't follow, so wipe `overpass-db` with it |
 
 ## Deploying on Coolify
 
-Create a Docker Compose resource from the pasted contents of `b1tw153-multiregion.yml`, and give the `overpass` service its domain with 8080 as the container port (clients use the bare domain, without a port). Then set the environment variables:
+Create a new resource from a **Public Repository**, with these settings:
+
+| Setting | Value |
+| -- | -- |
+| Repository URL | `https://github.com/tallcoleman/overpass-coolify` |
+| Branch | `main` |
+| Build Pack | Docker Compose |
+| Base Directory | `/multi-extract` |
+| Docker Compose Location | `/b1tw153-multiregion.yml` |
+
+Coolify clones the repo and builds the image from `Dockerfile` on each deploy. A public repository has no webhook, so after pushing a change, redeploy in Coolify. Give the `overpass` service its domain with 8080 as the container port (clients use the bare domain, without a port). Then set the environment variables:
 
 | Variable | Default | Meaning |
 | -- | -- | -- |
@@ -37,7 +47,7 @@ Create a Docker Compose resource from the pasted contents of `b1tw153-multiregio
 | `SNAPSHOT_KEEP_HOURS` | `72` | How long the snapshot is kept after an import, for a fast re-import |
 | `MERGE_LAG_ALERT_MINUTES` | `30` | The sidecar turns unhealthy when the merged head is older than this and not advancing |
 | `SIDECAR_MEM_LIMIT` | `1g` | Sidecar memory limit. Raise it for many or large regions |
-| `OVERPASS_IMAGE` | `b1tw153/overpass-api:0.7.62.11-r21` | Image for all three services |
+| `OVERPASS_IMAGE` | `b1tw153/overpass-api:0.7.62.11-r21` | Upstream image for `overpass`, and the base of the image built for the other two |
 
 Enter the values without quotes. Trailing slashes are fine, so URLs from the download page's "copy link" can be pasted as they are. The regions must be adjacent or overlapping extracts from the same OSM France replication tree, since the merge relies on them sharing planet sequence numbers.
 
@@ -50,7 +60,7 @@ On a first deploy, or after a region-list change:
 3. Init logs `database ready: replicate_id=S` and exits, and `overpass` starts.
 4. The snapshot is as old as the extracts, which can be a day or more, so the first catch-up run merges a long backlog. On the author's deployment, three regions merged about 40 minutes of backlog per minute, so a day's backlog takes about 35 minutes. `status.txt` shows a large `merge_lag_minutes` falling, and the sidecar reports `healthy: catching up` while it advances.
 
-On the author's deployment, host memory peaked at about 1.6 GB above its baseline during the import of two regions. If `overpass-init` is OOM-killed, lower `IMPORT_FLUSH_SIZE` in `compose.template.yml` from 4 to 2 or 1.
+On the author's deployment, host memory peaked at about 1.6 GB above its baseline during the import of two regions. If `overpass-init` is OOM-killed, lower `IMPORT_FLUSH_SIZE` in `b1tw153-multiregion.yml` from 4 to 2 or 1.
 
 A normal redeploy or restart with the same region lists re-imports nothing. Init exits at once and `overpass` resumes from its `replicate_id`.
 
