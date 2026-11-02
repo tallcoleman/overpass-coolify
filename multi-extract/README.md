@@ -79,6 +79,7 @@ Edit both variables (same order in each) and redeploy. The sidecar sees that the
 | `region_head_<name>`, `barrier` | Each region's head; the barrier is the lowest. A region whose head stops moving holds the whole stream back |
 | `region_unreachable` | The region whose `state.txt` couldn't be read at the last tick, if any |
 | `snapshot_seq`, `snapshot_expires` | The kept snapshot, if any, and when it will be deleted |
+| `regions` | Points to `/replication/regions.txt`, which lists the extract URLs and then the matching minute replication URLs the stream was built from |
 | `bootstrap_*` | The last snapshot build: start, end, result, consecutive failures |
 | `missing_diff_ticks`, `stream_cant_resume`, `db_cant_catch_up`, `bootstrap_failing` | Error flags; see *Recovery* |
 

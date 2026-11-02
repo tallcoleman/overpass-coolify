@@ -179,6 +179,7 @@ write_status() {
       else
         echo "snapshot_expires="
       fi
+      echo "regions=see /replication/regions.txt (extract URLs, then minute replication URLs)"
       cat "$STATUS_DIR/catch-up.txt" "$STATUS_DIR/bootstrap.txt" 2>/dev/null || true
     } >"$REPL/status.txt.tmp"
     mv "$REPL/status.txt.tmp" "$REPL/status.txt"
