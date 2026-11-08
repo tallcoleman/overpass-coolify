@@ -193,14 +193,18 @@ Updated 2026-11-07 with the results below. Items marked (open) still depend on t
 - No change to downloads or checksums: the redirect is followed and the `-latest` `.md5` is a direct `200` (A7). To make the check strict, resolve the redirect once and fetch the dated file and its dated `.md5`, which also removes the 10-minute cache race.
 - Keep `OVERPASS_META_MODE=yes` (E1). It costs about 2% more disk, and version, timestamp, `newer:` and `out meta` work. Document that user, uid and changeset are empty, so queries by them return nothing, and that `changed:` needs attic as before.
 - No change to the starting point (E2, E5). `bisect_timestamp.sh` always lands one day early with Geofabrik, because the newest object is older than the state's planet minute. The first update then re-applies the extract's own diff, which E5 shows is harmless (the result matched Geofabrik's next extracts exactly). Reading the header's sequence number (B1) would be tidier, but is optional.
-- No relay needed. A burst can make the image detect hourly updates after a restart, which costs extra polling and diff retention but not correctness, and bursts happen about once a month (A4, E3 desk check). The mirror run is open.
-- Documentation: data typically 6–20 h old when it appears and up to about 64 h old just before the next diff, 100-day diff retention (131 observed), larger regions, and about 30 polls a day plus 3 an hour on late days (A4, A6, E4 desk check; G1 open). Sizing: about 3× the PBF plus 4–6 GB of id maps (Freiburg: 160 MB PBF, 4.6 GB database, 5 min import with 1.4 GB peak, G1 partial). Daily updates take seconds and under 150 MB, so `stop_grace_period: 120s` is plenty (E5).
+- No relay needed. A restart just after a burst can make the image detect hourly updates (about 1% of the time), which costs extra polling and diff retention but not correctness (E3). A relay wouldn't fix E4's lag either.
+- Report upstream (`b1tw153/overpass-api`): `fetch_osc.sh` anchors its next poll on its own sighting time, which adds about 9–10 h of lag on a typical Geofabrik day (E4 model). The main loop checks child processes, disk space and stalls only once per detected frequency, so once a day here, and the fetch and apply retries after a failure also wait a full day (E6).
+- Optional: a data-age check, for example failing or warning when `replicate_id` hasn't changed in 72 h. The current healthcheck stays `healthy` with `fetch_osc.sh` dead (E6). Failing the healthcheck would also stop Coolify's proxy routing to the container, so a warning may be the better choice.
+- Keep `OVERPASS_AREAS=yes` and the cleanup defaults (E7). Areas follow the base data about a day late, and after a burst up to two diffs late.
+- Documentation: data typically about 20 h old when it changes (4–6 h when Geofabrik publishes it, plus the image's polling lag), and up to about 64–74 h old just before the next diff. Also: areas a day behind the base, 100-day diff retention (131 observed), larger regions, and about 30 polls a day plus 3 an hour on late days (A4, A6, E4 model, E7; G1 open). Sizing: about 3× the PBF plus 4–6 GB of id maps (Freiburg: 160 MB PBF, 4.6 GB database, 5 min import with 1.4 GB peak, G1 partial). Daily updates take seconds and under 150 MB, so `stop_grace_period: 120s` is plenty (E5).
 
 **`multi-extract/`**
 
 - Pair region diffs by planet minute, not sequence number, and number the merged stream itself (A2, A3). Sequence numbers differ between almost all regions, and the offset between two regions changes whenever one of them skips a day. The barrier becomes the newest planet minute every region has reached, and a day that one region covers with a two-day diff is merged as one step.
 - A new merge (D3/D4 over 96 days, D5). The current merge lost 80 live nodes in 5 events over 96 days for the test pair: orphan deletes caused by border-crossing ways that stopped using a node, and the only differences found. Both replacements tested give the exact union. Recommended: keep each region's extract rolled forward with its own diff (exact, C3), `osmium merge` them each day and publish `osmium derive-changes` between yesterday's and today's merged files. That takes about 30 s a day for two regions and needs no delete rule and no osmChange parser, so `tiebreak.pl` goes. The tested fallback is a stateful tie-break that drops a delete when another region's extract still has the object and that region's diff doesn't mention it. It was exact over 96 days and through Overpass. Either way the sidecar stores one extract per region, and the snapshot diff also stores the merged file.
 - Health: `MERGE_LAG_ALERT_MINUTES` has to become about 72 hours, and the "advancing" check has to stop assuming 5 minutes (A4, F1).
+- The `overpass` service polls the merged stream with the same image, so E4's polling lag and E6's day-long checks apply here too, whatever `Last-Modified` the sidecar serves.
 - Pruning: count by the stream's frequency or by age, not `KEEP_HOURS × 60` sequences (F1).
 - Bootstrap: accept version-and-timestamp metadata (B2). Rolling forward is exact (C3).
 - Poll interval: 30–60 minutes is plenty, and allowing 60 needs the range check changed (A4, F1).
@@ -212,14 +216,15 @@ Updated 2026-11-07 with the results below. Items marked (open) still depend on t
 
 Record each test's date, the files and sequence numbers it used, and its outcome here, under its ID.
 
-**Status (2026-11-07, second round).** Done: R0, A1–A3, A5–A7, B1–B4, C1, C3, C4, D1, D3, D4 (5 and 96 days), D5, E1, E2, E5, F1. Partly done: A4 (the 7-day hourly poll hasn't been run), C2 (one region, a sample of 100), E3 and E4 (desk check of the image's code only), G1 (Freiburg and the merged pair; not Ontario, and no comparison with OSM France's cut). Not run: D6 (covered in substance by A2 and A3), E6, E7, F2. Test cache, scripts and request log: `~/.cache/geofabrik-tests/` on the machine that ran them (663 requests to Geofabrik, about 2.4 GB, and 100 to the OSM API, all in the first round; the second round used only the cache).
+**Status (2026-11-07, third round).** Done: R0, A1–A3, A5–A7, B1–B4, C1, C3, C4, D1, D3, D4 (5 and 96 days), D5, E1, E2, E3, E5, E6, E7, F1. Partly done: A4 (the 7-day hourly poll hasn't been run), C2 (one region, a sample of 100), E4 (desk check and a model of the 133-day history; the 7-day live run hasn't been done), G1 (Freiburg and the merged pair; not Ontario, and no comparison with OSM France's cut). Not run: D6 (covered in substance by A2 and A3) and F2 (it needs F1's changes and the new merge first). What's left needs new downloads (G1 Ontario), the OSM API (C2), a week of wall-clock time (A4, E4) or code changes (F2). Test cache, scripts and request log: `~/.cache/geofabrik-tests/` on the machine that ran them (663 requests to Geofabrik, about 2.4 GB, and 100 to the OSM API, all in the first round; the second and third rounds used only the cache).
 
 Main findings so far:
 
 1. Geofabrik's `robots.txt` disallows the files both deployments fetch (R0).
 2. Sequence numbers aren't shared between regions, and the offset between two regions changes when one skips a day, so multi-extract has to pair diffs by planet minute (A2, A3).
 3. The current multi-extract merge loses live nodes when a border-crossing way stops using a node: 80 nodes in 96 days for one pair of regions (D3, D4). Two replacements both give the exact union: diffing merged snapshots (recommended, simplest) and a stateful tie-break (exact over 96 days and through Overpass) (D5).
-4. Single extracts work as they are. They roll forward exactly (C3), an Overpass database fed Geofabrik's diffs matched Geofabrik's next extract exactly (E5), and meta mode works with version and timestamp only (E1). `bisect_timestamp.sh` starts one day early, which is harmless (E2). The image follows Geofabrik's daily diffs without changes, with some extra polling after a burst (E3, E4 desk check).
+4. Single extracts work as they are. They roll forward exactly (C3), an Overpass database fed Geofabrik's diffs matched Geofabrik's next extract exactly (E5), and meta mode works with version and timestamp only (E1). `bisect_timestamp.sh` starts one day early, which is harmless (E2). The image follows Geofabrik's daily diffs without changes, and handles late and bunched diffs (E3, E6).
+5. But the image adds lag and hides stalls with daily diffs. It anchors its next poll 23 h after it *sees* a diff, so on most days a diff waits about 9–10 h after Geofabrik publishes it, and served data is typically about 20 h old when it changes, not 5 (E4 model). Its main loop checks child processes, disk and stalls only once a day, so a dead fetcher stays `healthy` in Coolify for up to a day (E6). Areas follow the base data about a day late (E7). These are upstream behaviours. This repo can only document them, or add a data-age check.
 
 ### R0. `robots.txt` check (2026-11-07)
 
@@ -298,7 +303,7 @@ Each batch is limited to `86400 / frequency` files and 360 files.
 - **Wrongly detected (3600 or 60).** Updates still work: the loop fetches whatever the root `state.txt` says is new, whatever the frequency. The costs are 24–38 extra requests after each new diff, and `CLEANUP_KEEP_COUNT = KEEP_HOURS × 3600 / frequency` keeps 72 diffs (3600) or 4320 (60) instead of 3. Nothing rejects the stream.
 - **Stall detection** is off unless `OVERPASS_STALL_MULTIPLIER` is set, and neither compose file sets it.
 
-*Outcome so far:* single-extract can follow Geofabrik directly. Misdetection costs requests and disk, not correctness. A relay that republishes state files with steady `Last-Modified` times would fix the detection and the post-burst lag, but it's an optimisation, not a requirement. E3's mirror run should confirm this, and E4 should measure the real request count and lag.
+*Outcome so far:* single-extract can follow Geofabrik directly. Misdetection costs requests and disk, not correctness. A relay that republishes state files with steady `Last-Modified` times would fix the detection and the post-burst lag, but it's an optimisation, not a requirement. E3's mirror run should confirm this, and E4 should measure the real request count and lag. (Third round: E3 confirmed the detection. The post-burst lag turned out to be the common case, not the exception, and a relay can't fix it, because the anchor is the fetcher's own sighting time. See E4 below.)
 
 ### F1. Minute and OSM France assumptions in the code (2026-11-07)
 
@@ -660,3 +665,81 @@ No error, warning or failure lines. Afterwards the database was exported in full
 | `freiburg-regbez` + `karlsruhe-regbez` merged (meta) | 312 MB | 636 s (under load) | 1.66 GB | 6,303 MB |
 
 Most of a small region's database is the id maps, which depend on how the region's ids are spread over the whole OSM id range rather than on the number of objects. For Freiburg, `nodes.map` is 3,583 MB and `ways.map` 687 MB, and the data files add only 445 MB, after six diffs. For the pair, the maps are 4,883 and 732 MB and the data 896 MB. So the data files are about 3× the PBF for both, and the maps add 4–6 GB on top, growing much more slowly than the region. So a fixed "times the PBF size" ratio misleads. Freiburg is 29× its PBF and the pair 20×, above the 14–20× seen with OSM France, and the ratio falls as regions grow. For sizing, count about 3× the PBF plus 4–6 GB. Ontario, and the comparison of a `smart` cut with OSM France's `complete_ways`, weren't measured.
+
+### Third round (2026-11-07)
+
+Like the second round, this used only the test cache, with no requests to Geofabrik. The mirror is nginx from the image itself, in a container on a private Docker network, serving copies of Freiburg's 133 state files and 96 diffs. Each state file's mtime, and so its `Last-Modified`, was set to the real value recorded from Geofabrik. A diff is "published" by rewriting the root `state.txt` with a chosen `Last-Modified` (`tools/e3pub.sh`). The `overpass` container ran with the same image, environment and healthcheck as `single-extract/b1tw153.yml`, plus `OVERPASS_STALL_MULTIPLIER=1`, on a fresh import of `freiburg-regbez-261101` made with `init.sh` against the mirror (`replicate_id=4944`, as in E2). Times in the logs below are UTC on 11-08. Scripts: `tools/e3hist.py`, `e3det.sh`, `e3pub.sh`, `e3restore.py`, `e3run.sh` and `e4lag.py`. Logs: `work/e3/`.
+
+### E3. Frequency detection (2026-11-07)
+
+**Over the history.** `tools/e3hist.py` applies the image's rule to the real `Last-Modified` of files `N`, `N-1` and `N-2`, for every head in the history, and weights each head by how long it stayed the newest.
+
+| Region | Heads | 86400 | 3600 | 60 | Share of time detected as 86400 |
+| -- | -- | -- | -- | -- | -- |
+| Freiburg | 131 | 130 | 1 (4886) | 0 | 99.3% |
+| Ontario | 131 | 129 | 2 (4838, 4901) | 0 | 98.5% |
+
+The misdetections come from the diff *after* a burst, not the burst itself. For 4886 and 4901, `N-1` and `N-2` were published in the same minute and `N` less than 24 h later. Ontario's 4838 had no burst, just two short gaps in a row (14 h and 9 h). A burst head itself (4950, for example) is still detected as 86400, because the day before it is long. Twelve heads in Freiburg and thirteen in Ontario came within 5 hours of the 43,200 s threshold, so the margin is often thin.
+
+**The image's own function.** `tools/e3det.sh` runs `get_path`, `get_last_modified` and `detect_update_frequency`, copied out of the image's `run_osm3s.sh`, against the mirror.
+
+| Pattern on the mirror | Detected |
+| -- | -- |
+| Real heads 4945, 4887, 4950 | 86400 |
+| Real head 4886 | 3600 |
+| `N-1` 30 s before `N`, `N-2` exactly 24 h before `N-1` | 86400 |
+| `N-1` 30 s before `N`, `N-2` 22 h before `N-1` | 3600 |
+| Three files in 40 minutes | 60 |
+
+These are the same answers as the replay and the desk check.
+
+**Live, detected as 86400.** The container started with the mirror's head at 4947 and the database at 4944.
+
+- Startup: detection took one second. `fetch_osc.sh` fetched 4945, 4946 and 4947 as three batches of one file each, since a batch is capped at `86400 / frequency` = 1 file, all within 2 s. `apply_osc_to_db.sh` applied them one per batch in 20 s. `fetch_osc.sh` logs a harmless `WARNING: MAX_BATCH_SIZE (360) with UPDATE_FREQUENCY (86400) exceeds one day`.
+- The head's `Last-Modified` was 3 days old, so polling began at once on the 288 s back-off. 4948 was published at 01:19:03 and fetched at 01:20:45, 102 s later, and applied in seconds.
+- `fetch_osc.sh` then logged `Sleeping until next file should be available (2026-11-09 00:20:45)`: 23 h after **its own sighting**, not after the diff's `Last-Modified`. `apply_osc_to_db.sh` waits on `inotify` for the fetcher's `replicate_id` and adds no lag of its own.
+
+**Live, misdetected as 3600.** The container was restarted with 4948's `Last-Modified` 22 h before the 4949/4950 burst, which reproduces 4886. It logged `Detected update frequency: 3600s`.
+
+- `fetch_osc.sh` slept until 51 minutes after the root `Last-Modified`, then polled 35 times in the next 24 minutes (every 12 s, then backing off), and every 20 minutes after that.
+- The main loop woke hourly. The first cleanup ran after an hour with `keeping 72 extra` instead of 3.
+- `rules_loop.sh` woke hourly and correctly didn't rerun areas while the database hadn't changed.
+- With `OVERPASS_STALL_MULTIPLIER=1`, the main loop logged `WARNING: Database has not advanced in 3603s` immediately followed by `Overpass processes are running and database has been recently updated`. The second message is printed unconditionally every hour.
+
+*Outcome:* detection works as the desk check described, and misdetection is rare (about 1% of the time) and costs polling and diff retention, not correctness. No relay is needed for detection. But the run showed that the lag comes from somewhere else: the 23-hour anchor on the fetcher's own sighting (E4 below).
+
+### E4. Lag from the polling anchor (2026-11-07, model; the 7-day live run hasn't been done)
+
+`fetch_osc.sh` starts polling at `anchor + 86400 − 3600`. When it finds a new file in its polling loop, including on the very first poll after sleeping, the anchor becomes the time it found it. Only when files are already waiting at the top of its loop (startup, or the second file of a burst) does it anchor on the root `Last-Modified`. So after a diff that appears early in the day, the next poll is 23 h later. If the next diff comes earlier in the day than that, it waits until the poll, and the poll after that is again 23 h on. The schedule then catches up with Geofabrik by only about an hour a day. The live run confirmed the anchor (above). `tools/e4lag.py` replays the real `Last-Modified` history through this rule, including the back-off and the burst case.
+
+| Region, 132 days | Wait after Geofabrik publishes | Days waiting over 1 h | Data age when applied | Data age when published (A4) |
+| -- | -- | -- | -- | -- |
+| Freiburg | median 9.1 h, p90 19.9 h, max 23.0 h | 104 | median 19.8 h, p90 27.8 h, max 39.4 h | median 6.2 h, p90 19.5 h, max 39.2 h |
+| Ontario | median 10.5 h, p90 20.8 h, max 23.0 h | 108 | median 18.8 h, p90 26.3 h, max 40.2 h | median 4.4 h, p90 19.6 h, max 40.0 h |
+
+The longest gap between two applies in the model is 53.6 h (Freiburg) and 49.3 h (Ontario). Just before the next apply, the served data is at most 63.4 h old for Freiburg and 73.6 h for Ontario (90th percentile 52 h and 50 h).
+
+*Outcome:* with Geofabrik's irregular publication times, the image applies a diff about 9–10 h after it appears on a typical day, so the data being served is typically about 19–20 h old when it changes rather than 4–6 h. The worst case isn't worse (about 40 h), because the delay only happens when the diff came early. This is a behaviour of the image, not of this repo. The fix belongs upstream: anchor on the root `Last-Modified` rather than on the sighting time when they differ by more than a poll interval (the script's own comment says this was the intent for "files already waiting"). This repo can't fix it with configuration, because `OVERPASS_UPDATE_FREQUENCY` is always detected, not read from the environment. A local relay doesn't help either, since the anchor is the sighting time whatever the relay sends. The 7-day live run (E4 as planned) would confirm the model and give the request count.
+
+### E6. Health during late publishing (2026-11-07)
+
+**Late diffs.** The container was restarted with 4948's `Last-Modified` 36 h old, which is the state a running container is in when a diff is held back. It detected 86400 and polled on the 288 s back-off. 4949 and 4950 were published together at 01:42:14. Both were fetched at 01:46:17–18, one per batch, and applied by 01:46:28, 10 s in all. The burst re-anchored the fetcher on the root `Last-Modified` (next poll `2026-11-09 00:42:09`), as the code says. So late or bunched publication is handled without errors.
+
+**The healthcheck doesn't see updates.** With the database at 4948, `fetch_osc.sh` was killed (`SIGKILL`, PID 215) at 01:31:11. Ten minutes later the container was `running healthy`, with no failing checks and nothing in its log. The compose healthcheck (`curl /api/status`) and the image's own both ask only whether the base dispatcher answers. The image's main loop is what notices a dead child process, but it sleeps `OVERPASS_UPDATE_FREQUENCY` seconds between checks (`sleep_with_interrupts "$SLEEP_TIME"`, interrupted only by `SIGTERM`, `SIGINT` and `SIGHUP`). At 86400 that's once a day, so a dead `fetch_osc.sh` or `apply_osc_to_db.sh` would go unnoticed for up to 24 h before the container exits and is restarted. From the code, at 86400 the same day-long wait applies to:
+
+- the disk-space check and stall detection, which also run in the main loop. Stall detection only ever logs a warning, and is off unless `OVERPASS_STALL_MULTIPLIER` is set;
+- `fetch_osc.sh` retrying after the source is unreachable (`sleeping ${UPDATE_FREQUENCY}s`) or after a failed batch;
+- `apply_osc_to_db.sh` retrying after a failed `update_from_dir`.
+
+So a network outage during one poll can cost a day, on top of E4's lag.
+
+*Outcome:* nothing breaks, but Coolify would show a deployment as healthy for a day or more after updates stop. A healthcheck in `b1tw153.yml` that also checks data age would make that visible. For example, it could fail when `replicate_id` hasn't changed in 72 h, which leaves a margin over the longest gap between applies in E4's model (54 h). One caveat: Coolify's proxy (Traefik) stops routing to an unhealthy container, so a data-age check would take a stale but working API offline. Logging a warning, or a separate alert, may be the better trade. The image's day-long sleeps and retries are upstream behaviour.
+
+### E7. Areas and cleanup (2026-11-07)
+
+`OVERPASS_AREAS=yes`, as in `b1tw153.yml`. A full area update of Freiburg took 21–22 s under emulation.
+
+- **Areas lag the base by up to a day.** `rules_loop.sh` runs an area update when `replicate_id` has changed, then sleeps until `replicate_id`'s mtime + `OVERPASS_UPDATE_FREQUENCY`, and after that checks every `frequency / 60` s (24 min). At startup it ran at once, while the backlog was still being applied, so `area_version` stayed at the import's data (`2026-11-01T21:20:54Z`) while `osm_base_version` reached 11-03 seconds later. It then logged `Sleeping for 86376 seconds`, and 4948, 4949 and 4950 arrived without an area update. After the restart the areas caught up to 4948 (11-04) only because the restart reran them, and 4949 and 4950, applied 5 minutes later, again waited for the next day. So areas are typically a day behind the base data, and up to two diffs behind after a burst. `AREA_UPDATE_TIME` (daily at a fixed time, if the database changed) is an option. Geofabrik's 90th-percentile publication time is about 17:00 UTC (A4), so 18:00 UTC would include that day's diff on most days, but it doesn't remove the lag. Areas change rarely, so documenting the lag is probably enough.
+- **Cleanup.** `CLEANUP_KEEP_COUNT = 72 × 3600 / 86400 = 3`. Cleanup first runs on the main loop's first wake, so a day after start, and daily after that. When misdetected as 3600, it keeps 72 diffs, as the live run showed (`keeping 72 extra`). At Freiburg's diff sizes (38 MB for 96 diffs), even 72 is negligible. The defaults are fine.
+
+*Outcome:* neither setting needs a different default. Document that areas follow the base about a day late.
