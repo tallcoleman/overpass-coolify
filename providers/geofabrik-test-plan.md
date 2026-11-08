@@ -185,7 +185,7 @@ Updated 2026-11-07 with the results below. Items marked (open) still depend on t
 
 **Both deployments**
 
-- `robots.txt` disallows every file the deployments fetch (R0). Treated here as aimed at crawlers, since Geofabrik documents automated updates. Worth confirming with Geofabrik before publishing Geofabrik as a supported source.
+- `robots.txt` disallows every file the deployments fetch, but Geofabrik's own guidance shows it is aimed at crawlers, not update clients (R0). Keep extract downloads rare (well under 24 a day) and back off on HTTP 429. Diffs and `state.txt` don't count toward the download limit.
 
 **`single-extract/`**
 
@@ -220,7 +220,7 @@ Record each test's date, the files and sequence numbers it used, and its outcome
 
 Main findings so far:
 
-1. Geofabrik's `robots.txt` disallows the files both deployments fetch (R0).
+1. Geofabrik's `robots.txt` disallows the files both deployments fetch, but Geofabrik supports automated updates. Its download limit counts extracts only, not diffs or `state.txt` (R0).
 2. Sequence numbers aren't shared between regions, and the offset between two regions changes when one skips a day, so multi-extract has to pair diffs by planet minute (A2, A3).
 3. The current multi-extract merge loses live nodes when a border-crossing way stops using a node: 80 nodes in 96 days for one pair of regions (D3, D4). Two replacements both give the exact union: diffing merged snapshots (recommended, simplest) and a stateful tie-break (exact over 96 days and through Overpass) (D5).
 4. Single extracts work as they are. They roll forward exactly (C3), an Overpass database fed Geofabrik's diffs matched Geofabrik's next extract exactly (E5), and meta mode works with version and timestamp only (E1). `bisect_timestamp.sh` starts one day early, which is harmless (E2). The image follows Geofabrik's daily diffs without changes, and handles late and bunched diffs (E3, E6).
@@ -243,6 +243,8 @@ Disallow: *.md5
 ```
 
 This disallows every file the deployments themselves fetch (extracts, `.md5`, `state.txt`, diffs), and most of what groups A–E need. The [technical notes](https://download.geofabrik.de/technical.html) say the diffs follow "the convention used by automatic update tools like Osmosis or pyosmium-up-to-date" and suggest running `pyosmium-up-to-date`, so the rules most likely target crawlers rather than update clients. That is an inference, not something Geofabrik states. Until it is settled, testing kept to paths `robots.txt` allows: the region index, folder listings, `.poly` files and the technical notes (11 requests in all). Not yet run for that reason: A2–A5, A6 (diff part), A7, B, C, D, E1, E2, E4–E7, F2 and G.
+
+**Settled (2026-11-08).** Geofabrik supports this use. Its [download page](https://www.geofabrik.de/data/download.html) offers daily diffs, and the technical notes recommend `pyosmium-up-to-date`. In a [2018 answer about rate limits](https://help.openstreetmap.org/questions/64487/what-is-geofabrik-download-request-rate-limit/), Geofabrik's Frederik Ramm describes the limit as a bulk allowance of 40 files that refills at about one file an hour, "not counting diff updates, state.txt, HTML pages etc", and says that "if you don't download more than 24 files a day, you should always be fine". The limit isn't published because it may change, and going over it gives HTTP 429 with no `Retry-After`. Geofabrik's [imprint](https://www.geofabrik.de/geofabrik/imprint.html) covers only logging and email. So `robots.txt` is read as aimed at crawlers. Clients should keep extract downloads rare and back off on 429. The tests stayed within this: of their 663 requests, 10 were extract downloads (each file once, according to `requests.log`), and the rest were state files, diffs, listings and `.md5` files.
 
 ### A1. Region index (2026-11-07)
 
