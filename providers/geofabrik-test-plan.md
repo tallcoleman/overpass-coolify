@@ -191,15 +191,15 @@ Updated 2026-11-07 with the results below. Items marked (open) still depend on t
 
 - New documented values for `IMPORT_OSM_DATA_SOURCE` (`.../<region>-latest.osm.pbf`) and `OVERPASS_DIFF_URL` (`.../<region>-updates`) (A1).
 - No change to downloads or checksums: the redirect is followed and the `-latest` `.md5` is a direct `200` (A7). To make the check strict, resolve the redirect once and fetch the dated file and its dated `.md5`, which also removes the 10-minute cache race.
-- A decision on meta mode without user data, documented (B2; E1 open).
-- The starting sequence can come from the PBF header (B1). Whether `bisect_timestamp.sh` agrees is open (E2).
+- Keep `OVERPASS_META_MODE=yes` (E1). It costs about 2% more disk, and version, timestamp, `newer:` and `out meta` work. Document that user, uid and changeset are empty, so queries by them return nothing, and that `changed:` needs attic as before.
+- No change to the starting point (E2, E5). `bisect_timestamp.sh` always lands one day early with Geofabrik, because the newest object is older than the state's planet minute. The first update then re-applies the extract's own diff, which E5 shows is harmless (the result matched Geofabrik's next extracts exactly). Reading the header's sequence number (B1) would be tidier, but is optional.
 - No relay needed. A burst can make the image detect hourly updates after a restart, which costs extra polling and diff retention but not correctness, and bursts happen about once a month (A4, E3 desk check). The mirror run is open.
-- Documentation: data typically 6–20 h old when it appears and up to about 64 h old just before the next diff, 100-day diff retention (131 observed), larger regions, and about 30 polls a day plus 3 an hour on late days (A4, A6, E4 desk check; G1 open).
+- Documentation: data typically 6–20 h old when it appears and up to about 64 h old just before the next diff, 100-day diff retention (131 observed), larger regions, and about 30 polls a day plus 3 an hour on late days (A4, A6, E4 desk check; G1 open). Sizing: about 3× the PBF plus 4–6 GB of id maps (Freiburg: 160 MB PBF, 4.6 GB database, 5 min import with 1.4 GB peak, G1 partial). Daily updates take seconds and under 150 MB, so `stop_grace_period: 120s` is plenty (E5).
 
 **`multi-extract/`**
 
 - Pair region diffs by planet minute, not sequence number, and number the merged stream itself (A2, A3). Sequence numbers differ between almost all regions, and the offset between two regions changes whenever one of them skips a day. The barrier becomes the newest planet minute every region has reached, and a day that one region covers with a two-day diff is merged as one step.
-- A different delete tie-break (D3/D4 over 96 days). The current merge lost 80 live nodes in 5 events over 96 days for the test pair: orphan deletes caused by border-crossing ways that stopped using a node. These were the only differences. The fix is to keep each region's extract rolled forward with its own diff (exact, C3) and drop a region's delete when another region's extract still has the object and that region's diff doesn't mention it. Measured cost: a few seconds per region per day, and one extract per region on disk. The existing `tiebreak.pl` is a no-op for Geofabrik (C1) and can be replaced by this check.
+- A new merge (D3/D4 over 96 days, D5). The current merge lost 80 live nodes in 5 events over 96 days for the test pair: orphan deletes caused by border-crossing ways that stopped using a node, and the only differences found. Both replacements tested give the exact union. Recommended: keep each region's extract rolled forward with its own diff (exact, C3), `osmium merge` them each day and publish `osmium derive-changes` between yesterday's and today's merged files. That takes about 30 s a day for two regions and needs no delete rule and no osmChange parser, so `tiebreak.pl` goes. The tested fallback is a stateful tie-break that drops a delete when another region's extract still has the object and that region's diff doesn't mention it. It was exact over 96 days and through Overpass. Either way the sidecar stores one extract per region, and the snapshot diff also stores the merged file.
 - Health: `MERGE_LAG_ALERT_MINUTES` has to become about 72 hours, and the "advancing" check has to stop assuming 5 minutes (A4, F1).
 - Pruning: count by the stream's frequency or by age, not `KEEP_HOURS × 60` sequences (F1).
 - Bootstrap: accept version-and-timestamp metadata (B2). Rolling forward is exact (C3).
@@ -212,14 +212,14 @@ Updated 2026-11-07 with the results below. Items marked (open) still depend on t
 
 Record each test's date, the files and sequence numbers it used, and its outcome here, under its ID.
 
-**Status (2026-11-07).** Done: R0, A1–A3, A5–A7, B1–B4, C1, C3, C4, D1, D3, D4 (5 and 96 days), F1. Partly done: A4 (the 7-day hourly poll hasn't been run), C2 (one region, a sample of 100), E3 and E4 (desk check of the image's code only). Not run: D5 (the fix the 96-day run points to still needs to be built and tested), D6 (covered in substance by A2 and A3), E1, E2, E5–E7, F2, G1. Test cache, scripts and request log: `~/.cache/geofabrik-tests/` on the machine that ran them (663 requests to Geofabrik, about 2.4 GB, and 100 to the OSM API; the cache is 7 GB).
+**Status (2026-11-07, second round).** Done: R0, A1–A3, A5–A7, B1–B4, C1, C3, C4, D1, D3, D4 (5 and 96 days), D5, E1, E2, E5, F1. Partly done: A4 (the 7-day hourly poll hasn't been run), C2 (one region, a sample of 100), E3 and E4 (desk check of the image's code only), G1 (Freiburg and the merged pair; not Ontario, and no comparison with OSM France's cut). Not run: D6 (covered in substance by A2 and A3), E6, E7, F2. Test cache, scripts and request log: `~/.cache/geofabrik-tests/` on the machine that ran them (663 requests to Geofabrik, about 2.4 GB, and 100 to the OSM API, all in the first round; the second round used only the cache).
 
 Main findings so far:
 
 1. Geofabrik's `robots.txt` disallows the files both deployments fetch (R0).
 2. Sequence numbers aren't shared between regions, and the offset between two regions changes when one skips a day, so multi-extract has to pair diffs by planet minute (A2, A3).
-3. The current multi-extract merge loses live nodes when a border-crossing way stops using a node: 80 nodes in 96 days for one pair of regions. A check against the other regions' rolled-forward extracts fixes it, and everything else in the merge was exact (D3, D4).
-4. Single extracts roll forward exactly (C3), and the image follows Geofabrik's daily diffs without changes, with some extra polling after a burst (E3, E4 desk check).
+3. The current multi-extract merge loses live nodes when a border-crossing way stops using a node: 80 nodes in 96 days for one pair of regions (D3, D4). Two replacements both give the exact union: diffing merged snapshots (recommended, simplest) and a stateful tie-break (exact over 96 days and through Overpass) (D5).
+4. Single extracts work as they are. They roll forward exactly (C3), an Overpass database fed Geofabrik's diffs matched Geofabrik's next extract exactly (E5), and meta mode works with version and timestamp only (E1). `bisect_timestamp.sh` starts one day early, which is harmless (E2). The image follows Geofabrik's daily diffs without changes, with some extra polling after a burst (E3, E4 desk check).
 
 ### R0. `robots.txt` check (2026-11-07)
 
@@ -578,3 +578,85 @@ All 80 are nodes: 12 tagged, 68 untagged. Each was removed from one region's ext
 *Outcome:* **this overturns the five-day result.** The current merge loses live objects for Geofabrik: 5 events and 80 nodes in 96 days for one pair of regions, and the losses persist until each node is next edited. The cause is the one the plan predicted. The checkpoints also show that orphans are the *only* problem: every other object matched every week. So a merge that also drops orphan deletes would have reproduced the union exactly over all 96 days.
 
 The fix that follows from this, D5's stateful tie-break, is cheap with daily diffs. The sidecar keeps each region's extract and rolls it forward with that region's own diff, which C3 and this run show is exact. A region's delete is dropped when the object's id isn't in any other region's diff for the day and is in another region's extract. In this run that lookup (`osmium getid` on the other region's extract) took a few seconds per region per day under emulation, and the whole daily step for two regions, including rolling forward, took about 30–40 s. The cost is disk: one extract per region (here about 150 MB each) on top of what the sidecar already holds. D5's other option, diffing merged snapshots, would also work but needs a merge of all regions every day.
+
+### Second round (2026-11-07)
+
+Everything in this round ran on files already in the test cache, so it made no requests to Geofabrik (`robots.txt` wasn't re-fetched for the same reason). The Overpass tests used the repo's own `single-extract/scripts/init.sh`, with the extract given as a `file://` URL and `OVERPASS_DIFF_URL` pointed at a local HTTP mirror of the cache. The cache holds all 133 state files that Geofabrik had for `freiburg-regbez` on the day it was made, so the mirror answers like the server did, including the 404s for older ones. The image ran under Rosetta on an 8-CPU, 8 GB Docker VM, so times are slower than on a native amd64 host. Some steps ran alongside the D5 run and are marked "under load". Scripts: `tools/d5.sh`, `d5b.sh`, `d5c.sh`, `d5d.sh`, `dropdel.pl`, `imp.sh`, `e1q.sh`, `e5.sh`, `export.sh` and `peak.sh` in the test cache. Peak memory is the process's `VmHWM` (or the sum of `VmRSS` over the container for imports), sampled every 0.1–1 s.
+
+### D5. Alternative merges (2026-11-07)
+
+**Stateful tie-break, 96 days.** Same window and start as the 96-day D3/D4 run (`260801` extracts, diffs 4855–4950). Each day, each region's extract is rolled forward with its own diff. A region's delete is dropped when no other region's diff mentions that id and another region's previous-day extract still has it (`osmium getid`). The filtered diffs are merged with `osmium merge-changes --simplify` in both input orders, and the result is chained from `merge(260801)`. The chained result was compared with `osmium merge` of the two rolled-forward extracts weekly and on every day that dropped something.
+
+| Check | Result |
+| -- | -- |
+| Chained merge vs union, 19 checkpoints including all 5 orphan days | identical every time (31,403,338 to 31,650,392 objects) |
+| Chained merge `4950` vs `merge(dated 261106)` | identical (31,650,392 same) |
+| Deletes dropped | 80 (66 from Freiburg's diff, 14 from Karlsruhe's): exactly the 80 orphans of the D3/D4 run, by day and id |
+| Input order | same output in both orders on all 96 days |
+| Time per day (under load) | check 5.3 s mean, 10.2 s max; `merge-changes` 0.8 s; rolling both regions 14 s; applying the merged diff to the chained snapshot 14 s |
+
+**Stateful tie-break in Overpass.** `merge(F, K)` rolled to 4875 was imported with `init.sh` (meta mode). The stateful merged diffs for 4876–4882, including the 4876 orphan day, were then applied the way `apply_osc_to_db.sh` applies them: one `update_from_dir --meta --flush-size=0` call per daily diff, with the dispatcher running. The whole database was then exported (nodes, ways, relations, `out meta`) and compared with `merge(F, K)` at 4882, as OPL with version and timestamp. Result: **identical, 31,442,630 objects**, and the 12 power towers that the current merge deletes are present. Each daily diff (3–10 MB uncompressed) applied in 13–23 s with at most 119 MB.
+
+**Merged snapshots, then `derive-changes`.** Measured on one day without other load: the `261101` extracts (4945) rolled forward with diff 4946.
+
+| Step | Time | Peak memory |
+| -- | -- | -- |
+| Roll one region forward (`apply-changes`, 150 MB PBF) | 5.3–5.7 s | 166 MB |
+| `osmium merge` of the two regions (2 × 150 MB) | 10.5–11.2 s | 247 MB |
+| `osmium derive-changes` between yesterday's and today's merged files (315 MB each) | 2.9 s | 132 MB (151 MB with `--increment-version`) |
+| Apply the derived diff to yesterday's merged file | 11.0 s | 207 MB |
+| Proxy for an Ontario-sized region: `osmium merge` of two 625 MB `baden-wuerttemberg` files | 24.7 s | 367 MB |
+| Proxy: `derive-changes` between `baden-wuerttemberg` `261101` and `261106` (five days of changes) | 6.5 s | 219 MB |
+| For comparison, the stateful check's `osmium getid` on one region's extract | 1.2 s | 756 MB |
+
+Applying the derived diff to yesterday's merged file gives today's merged file exactly (31,638,302 same). The derived diff (735 KB) has exactly as many nodes, ways and relations as the two region diffs together. An id index for one region (the plan's alternative to keeping whole extracts) would be 16.8 million ids and 49 MB gzipped, against 160 MB for the extract. That saves little, since the stateful check and roll-forward need the extracts anyway.
+
+*Outcome:* both designs give the exact union, and both are cheap with daily diffs: well under a minute per day for two regions, and under 1 GB of memory. They need the same state, which is each region's extract rolled forward daily.
+
+- The **snapshot diff** is the simpler one to build. Roll each region forward, `osmium merge` them, and `derive-changes` against yesterday's merged file. It is correct by construction, so it needs no rule about which deletes to keep and no osmChange parser (`tiebreak.pl` goes). It costs one full merge a day, which grows with the total size of all regions (about 25 s for two Ontario-sized ones), plus disk for one merged file. Its correctness rests on `apply(M, derive(M, M')) = M'`, which held exactly here. It wasn't run over 96 days or through Overpass, but the diffs it makes have the same shape as Geofabrik's own (`derive-changes` without `--increment-version`), which Overpass applied without errors in E5.
+- The **stateful tie-break** is closest to the current code. It was exact over 96 days and in Overpass. It needs one `getid` per region pair on days with unmatched deletes, which adds up as regions are added, and it keeps a delete rule whose cases have to stay right.
+
+The recommendation is the snapshot diff, for its simplicity. The stateful tie-break is the tested fallback.
+
+### E1. Import without user data (2026-11-07)
+
+`freiburg-regbez-261101.osm.pbf` (160 MB) imported with `init.sh` (`IMPORT_FLUSH_SIZE=4`, gz compression), once with `OVERPASS_META_MODE=yes` and once with `no`, both under load.
+
+| Mode | Import | Peak memory | Database |
+| -- | -- | -- | -- |
+| `yes` | 303 s | 1.42 GB | 4,610 MB |
+| `no` | 312 s | 1.40 GB | 4,524 MB |
+
+With meta, `out meta` returns the real `version` and `timestamp` and `changeset="0" uid="0" user=""` for every object. `user:` and `uid:` filters return nothing, and `newer:` works (111 nodes in a test box, 116 after the next five diffs). `changed:` fails with a missing `node_changelog.bin`, because it needs attic data; that's true of any meta-mode database, not just Geofabrik's. Without meta, `out meta` fails (`user_data.bin` missing). The import logged about 450,000 `compute_geometry: … not found` lines for relation members outside the extract. These are expected for an extract and harmless.
+
+*Outcome:* keep `OVERPASS_META_MODE=yes`. It costs about 2% more disk (about 90 MB here) and no extra import time, and version, timestamp, `newer:` and `out meta` keep working. Document that queries by user, uid or changeset return nothing with Geofabrik data.
+
+### E2. Starting point (2026-11-07)
+
+`init.sh`'s `bisect_timestamp.sh` against the mirror wrote `replicate_id=4944` for the `261101` extract, whose header says sequence 4945. The cause: `update_database` sets `osm_base_version` from the newest object's timestamp (`2026-11-01T21:20:54Z`), because osmium's XML output drops the header timestamp, and that is earlier than the state file's planet minute (`21:21:36Z`). The bisect finds the last state at or before it, which is the day before. This always happens with Geofabrik, because the newest edit in a region is always before the planet minute the cut was made at. The merged pair rolled to 4875 gave 4874 the same way. The bisect itself made 13 state-file requests, 5 of them 404s below the 131-day retention, which it treats as "older" and handles correctly. At Geofabrik those would arrive in quick succession, without the one-second spacing.
+
+*Outcome:* the off-by-one makes the first update re-apply the diff the extract was cut from. E5 shows that's harmless. `init.sh` can keep bisecting. Reading the header's sequence number instead would save one day's re-application and the burst of requests, but isn't needed.
+
+### E5. Applying a daily diff (2026-11-07)
+
+On the meta-mode Freiburg database from E1, diffs 4945–4950 were applied one per `update_from_dir --meta --flush-size=0` call with the dispatcher running, as `apply_osc_to_db.sh` does. Its `APPLY_OSC_MAX_BATCH_TIME` of 86,400 s means a backlog of daily diffs is also applied one day per batch. 4945 is the diff already contained in the extract, so it went in twice (see E2).
+
+| Diff | Uncompressed | Time | Peak memory |
+| -- | -- | -- | -- |
+| 4945 (repeat) | 6.1 MB | 11.6 s | 68 MB |
+| 4946 | 4.5 MB | 6.8 s | 29 MB |
+| 4947 | 6.0 MB | 7.0 s | 30 MB |
+| 4948–4950 | 1.2–2.0 MB | 5.4–7.2 s | 24–29 MB |
+
+No error, warning or failure lines. Afterwards the database was exported in full and compared with Geofabrik's `freiburg-regbez-261106.osm.pbf` (sequence 4950), as OPL with version and timestamp: **identical, 16,838,499 objects**. So the repeated diff, the old-version deletes (C2) and the creates of unchanged objects entering the extract (C4) all apply correctly. The merged pair's diffs in D5 took 13–23 s each (3–10 MB). The largest Freiburg diff in the 96-day window (4889, 11.9 MB) is about twice the size of 4947, which by these numbers would take well under a minute.
+
+*Outcome:* `stop_grace_period: 120s` is plenty. Updates need under 150 MB on top of the dispatcher.
+
+### G1. Database size and import cost (2026-11-07, partial)
+
+| Data | PBF | Import | Peak memory | Database |
+| -- | -- | -- | -- | -- |
+| `freiburg-regbez` (meta) | 160 MB | 303 s (under load) | 1.42 GB | 4,610 MB |
+| `freiburg-regbez` + `karlsruhe-regbez` merged (meta) | 312 MB | 636 s (under load) | 1.66 GB | 6,303 MB |
+
+Most of a small region's database is the id maps, which depend on how the region's ids are spread over the whole OSM id range rather than on the number of objects. For Freiburg, `nodes.map` is 3,583 MB and `ways.map` 687 MB, and the data files add only 445 MB, after six diffs. For the pair, the maps are 4,883 and 732 MB and the data 896 MB. So the data files are about 3× the PBF for both, and the maps add 4–6 GB on top, growing much more slowly than the region. So a fixed "times the PBF size" ratio misleads. Freiburg is 29× its PBF and the pair 20×, above the 14–20× seen with OSM France, and the ratio falls as regions grow. For sizing, count about 3× the PBF plus 4–6 GB. Ontario, and the comparison of a `smart` cut with OSM France's `complete_ways`, weren't measured.
