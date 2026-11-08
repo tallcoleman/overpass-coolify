@@ -2,9 +2,12 @@
 
 This plan moves the multi-extract sidecar's logic from bash and Perl to Python, and then adds Geofabrik as a second provider next to OpenStreetMap France. It builds on the results in [`geofabrik-test-plan.md`](geofabrik-test-plan.md) (cited by test ID, e.g. D5) and on [`multi-extract/DESIGN.md`](../multi-extract/DESIGN.md). `single-extract/` needs only documentation changes for Geofabrik, listed at the end.
 
+The work happens in a new directory, `multi-extract-v2/`, next to the current `multi-extract/`, which stays as it is. Only at the very end, once every acceptance test has passed (phase 6), does `multi-extract-v2/` replace `multi-extract/`.
+
 ## Goals and constraints
 
-- **Existing OSM France deployments upgrade in place.** Same volumes, file layout, environment variables, merged stream path (`/replication/minute`), `status.txt` keys and region-list stamp. A changed stamp would make the stack wipe and re-import the database on upgrade, so the stamp's bytes must not change.
+- **The current deployment stays untouched until the end.** `multi-extract/` keeps running existing deployments and keeps serving as the reference for the parity tests. It gets only urgent fixes during the work, and each one is ported to `multi-extract-v2/` as well.
+- **Existing OSM France deployments upgrade in place** when `multi-extract-v2/` replaces `multi-extract/`. Same volumes, file layout, environment variables, merged stream path (`/replication/minute`), `status.txt` keys and region-list stamp. A changed stamp would make the stack wipe and re-import the database on upgrade, so the stamp's bytes must not change.
 - **One provider per deployment.** Mixing providers isn't supported, since each provider's diffs match only its own extracts.
 - **Correct by construction for Geofabrik.** The merged stream must equal the union of the regions' extracts after every step. The current merge loses live nodes on Geofabrik data (D3, D4 over 96 days), so Geofabrik gets the snapshot-diff merge recommended by D5.
 - **Testable without the network or osmium.** Every decision (pairing, barrier, pruning, health, crash recovery) lives in pure functions with unit tests. osmium and HTTP sit behind thin interfaces.
@@ -31,8 +34,10 @@ This plan moves the multi-extract sidecar's logic from bash and Perl to Python, 
 
 ### Layout
 
+`multi-extract-v2/` starts as a copy of `multi-extract/` (compose file, Dockerfile, docs, tools), then changes as follows:
+
 ```
-multi-extract/
+multi-extract-v2/
   Dockerfile                    adds python3; COPY sidecar/
   sidecar/
     entrypoint.sh               kept: chown volume roots as root, setpriv to 10001, exec python
@@ -64,7 +69,7 @@ multi-extract/
     fixtures/
 ```
 
-`lib.sh`, `bootstrap.sh`, `catch-up.sh`, `health.sh`, `init.sh` and `tiebreak.pl` are deleted once the Python version reaches parity (phase 1). The compose file calls `python3 -m overpass_sidecar <job>` for the healthcheck and for `overpass-init`, and the crontab calls it for the two jobs.
+`multi-extract-v2/` has no copy of `lib.sh`, `bootstrap.sh`, `catch-up.sh`, `health.sh`, `init.sh` or `tiebreak.pl`. Those remain only in `multi-extract/`, until phase 6 replaces it. The compose file calls `python3 -m overpass_sidecar <job>` for the healthcheck and for `overpass-init`, and the crontab calls it for the two jobs.
 
 ### Interfaces that tests replace
 
@@ -236,10 +241,10 @@ A `test` target in the Dockerfile adds `python3-pytest` and runs `tests/integrat
 
 These need Docker and the test cache, so they run by hand or in a scheduled job, not on every commit.
 
-- **OSM France parity.** Before the bash scripts are deleted, record their output for a fixed window: the merged diffs, state files and `status.txt` produced by the current sidecar against a local mirror of a few hundred OSM France minutes. The Python sidecar must produce byte-identical diffs and state files over the same window, apart from `updated=` timestamps.
+- **OSM France parity.** Record the output of the bash sidecar in `multi-extract/` for a fixed window: the merged diffs, state files and `status.txt` produced by the current sidecar against a local mirror of a few hundred OSM France minutes. The Python sidecar must produce byte-identical diffs and state files over the same window, apart from `updated=` timestamps.
 - **Geofabrik replay.** Serve the cached Freiburg and Karlsruhe `-updates` folders from nginx with their recorded `Last-Modified` times (as in the third test round), and run the full stack over all 96 days from the `260801` extracts. Check weekly that the merged file equals `osmium merge` of the two rolled-forward extracts, and at the end that an Overpass export equals `merge(261106)`. This closes D5's open point: the snapshot-diff merge has so far been checked on one day only, and not through Overpass.
 - **F2 failure cases** from `DESIGN.md`: a stalled region, a diff missing below a region's head, a region-list change and back, a database wipe with the snapshot kept, an OOM-killed step, and a Geofabrik-style burst and 36-hour delay (E6).
-- **Border queries** with `multi-extract/tools/compare.sh`, rewritten for the Freiburg/Karlsruhe border.
+- **Border queries** with `multi-extract-v2/tools/compare.sh`, rewritten for the Freiburg/Karlsruhe border.
 
 ### Tooling
 
@@ -250,15 +255,16 @@ These need Docker and the test cache, so they run by hand or in a scheduled job,
 ### Phase 0: preparation
 
 - Record in `DESIGN.md` why Geofabrik is a supported source despite `robots.txt` (R0): Geofabrik documents automated updates, and diffs and `state.txt` don't count toward its download limit (see *Requests to Geofabrik*). Link the sources, so the reasoning can be checked again if Geofabrik's policy changes.
-- Copy the fixtures into `multi-extract/tests/fixtures/`: the state files from the test cache and a few small diffs. Leave out the extracts.
+- Create `multi-extract-v2/` as a copy of `multi-extract/`, and add a row to the root `README.md` marking it as in development.
+- Copy the fixtures into `multi-extract-v2/tests/fixtures/`: the state files from the test cache and a few small diffs. Leave out the extracts.
 - Record the OSM France parity baseline with the current bash sidecar.
 
 ### Phase 1: Python port with OSM France parity
 
 - Add `python3` to the image (no pip), check the size it adds, and add the package with `config`, `http`, `osmium`, `state`, `stream`, `status`, `health`, `bootstrap`, `catchup`, `init` and `diffmerge`, behaving exactly like the bash scripts. Port `tiebreak.pl` with the same strict line parser, and test it against the Perl version on recorded diffs before deleting it.
 - Switch the crontab, the healthcheck and `overpass-init` to Python. Keep `entrypoint.sh` for the root steps only.
-- Pass the parity test, then deploy on Coolify over an existing OSM France stack and check that it upgrades without a rebuild (same stamp, no wipe) and keeps following the stream.
-- Delete the bash scripts and `tiebreak.pl`, and update `DESIGN.md` to name the Python modules.
+- Pass the parity test. Then, on a test OSM France stack in Coolify, change the resource's Base Directory from `/multi-extract` to `/multi-extract-v2`. Coolify names volumes after the resource, so the stack keeps its volumes. Check that it upgrades without a rebuild (same stamp, no wipe) and keeps following the stream. Then switch back to `/multi-extract` and check that the rollback doesn't rebuild either.
+- Update `multi-extract-v2/DESIGN.md` to name the Python modules. Delete the bash scripts and `tiebreak.pl` from the v2 copy, which never runs them.
 
 ### Phase 2: changes needed by both providers
 
@@ -279,13 +285,37 @@ These need Docker and the test cache, so they run by hand or in a scheduled job,
 - The Geofabrik replay over 96 days, through Overpass.
 - The F2 failure cases on the mirror.
 - A live deployment on Coolify with `freiburg-regbez` + `karlsruhe-regbez` for at least 7 days. This also gives the request counts and lag that A4 and E4 still lack.
+- A live OSM France deployment of `multi-extract-v2/` for at least 7 days, next to a `multi-extract/` deployment with the same regions, compared with `compare.sh`.
 - Optionally, G1 for an Ontario-sized pair, to confirm the sizing figures before recommending larger regions.
 
 ### Phase 5: documentation
 
-- `multi-extract/README.md`: a Geofabrik section with example URL lists, `MERGED_STREAM=day`, defaults, expected data age (typically about 20 h when it changes, up to about 74 h, per E4), areas a day behind the base (E7), and queries by user returning nothing (E1).
-- `multi-extract/DESIGN.md`: a section on what the design relies on in Geofabrik's data, the snapshot-diff merge and why the tie-break isn't enough (D3, D4), step directories and recovery, and disk sizing (about 2 `E` steady and 4 `E` during a step in `sidecar-work`, on top of the database).
+- `multi-extract-v2/README.md`: a Geofabrik section with example URL lists, `MERGED_STREAM=day`, defaults, expected data age (typically about 20 h when it changes, up to about 74 h, per E4), areas a day behind the base (E7), and queries by user returning nothing (E1).
+- `multi-extract-v2/DESIGN.md`: a section on what the design relies on in Geofabrik's data, the snapshot-diff merge and why the tie-break isn't enough (D3, D4), step directories and recovery, and disk sizing (about 2 `E` steady and 4 `E` during a step in `sidecar-work`, on top of the database).
 - Upstream issues for `b1tw153/overpass-api`: the polling anchor (E4) and the day-long main loop and retries (E6).
+
+### Phase 6: replace `multi-extract/`
+
+Only once every acceptance test below has passed:
+
+| Acceptance test | Passes when |
+| -- | -- |
+| Unit and integration tests | Green in CI |
+| OSM France parity | Byte-identical diffs and state files against the bash sidecar over the recorded window |
+| In-place upgrade and rollback | An existing OSM France stack switched to `/multi-extract-v2` and back has no wipe, no re-import and no gap in its stream |
+| OSM France live run | A v2 OSM France stack runs for 7 days next to a v1 stack with the same regions, healthy throughout, and `compare.sh` gives identical counts |
+| Geofabrik 96-day replay | The merged file equals the union of the rolled-forward extracts at every checkpoint, and the final Overpass export equals `merge(261106)` |
+| Failure cases | Every F2 case passes for both providers |
+| Geofabrik live run | 7 days on Coolify, healthy throughout. Extracts are downloaded only at bootstrap, and other requests stay within *Requests to Geofabrik* |
+| Documentation | Phase 5 complete |
+
+Then, in one commit:
+
+1. Replace the contents of `multi-extract/` with those of `multi-extract-v2/`, and delete `multi-extract-v2/`. Existing Coolify resources keep the Base Directory `/multi-extract`, so they pick up the new version at their next deploy.
+2. Before that commit, move any test resources pointing at `/multi-extract-v2` back to `/multi-extract`, so they don't break when the directory goes.
+3. Update the root `README.md`: remove the v2 row, and describe `multi-extract/` as supporting both providers.
+
+The previous version stays in Git history. Since the rollback test passed, an OSM France deployment can return to it by reverting the commit.
 
 ## single-extract changes (documentation only)
 
